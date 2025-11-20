@@ -273,7 +273,7 @@ Evaluate VLA models and adding custom models to VLA-Arena.
 | task_workflows | 74.0% | 0.0% | 0.0% | 24.7% |
 | unseen_objects | 60.0% | 40.0% | 20.0% | 40.0% |
 
-### 📈 Long Horizon Performance
+#### 📈 Long Horizon Performance
 | Task Suite | L0 Success | L1 Success | L2 Success | Avg Success |
 |------------|------------|------------|------------|-------------|
 | long_horizon | 80.0% | 0.0% | 0.0% | 26.7% |
