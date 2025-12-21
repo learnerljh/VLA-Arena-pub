@@ -451,4 +451,3 @@ python scripts/manage_assets.py download my_task \
 - [Data Collection Guide](data_collection.md) - How to collect demonstrations
 - [Evaluation Guide](evaluation.md) - How to evaluate policies
 - [HuggingFace Hub Documentation](https://huggingface.co/docs/hub/index) - Cloud storage
-
