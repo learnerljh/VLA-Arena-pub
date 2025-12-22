@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vla-arena"
-version = "0.1.0"
+version = "1.0.0"
 authors = [
     {name = "Jiahao Li", email = "jiahaoli2077@gmail.com"},
     {name = "Borong Zhang"},
@@ -14,6 +14,13 @@ description = "VLA-Arena: A Comprehensive Benchmark for Vision-Language-Action M
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = "==3.11"
+keywords = ["Vision-Language-Action", "VLA Models", "Robotic Manipulation", "Benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 dependencies = [
     "imageio[ffmpeg]",
@@ -36,8 +43,10 @@ dependencies = [
 "vla-arena" = "vla_arena.cli.main:main"
 "vla-arena.main" = "vla_arena.main:main"
 "vla-arena.eval" = "vla_arena.evaluate:main"
-"vla-arena.config_copy" = "scripts.config_copy:main"
-"vla-arena.create_template" = "scripts.create_template:main"
+"vla-arena.config-copy" = "scripts.config_copy:main"
+"vla-arena.create-template" = "scripts.create_template:main"
+"vla-arena.download-tasks" = "scripts.download_tasks:main"
+"vla-arena.manage-tasks" = "scripts.manage_assets:main"
 
 [project.optional-dependencies]
 openvla = [
@@ -208,7 +217,7 @@ openpi = [
     "polars>=1.30.0",
 ]
 
-# Integrated Dev/Tool Dependencies from File B
+# Integrated Dev/Tool Dependencies
 lint = [
     "isort >= 5.11.0",
     "black >= 23.1.0",
@@ -226,11 +235,13 @@ lint = [
     "pyenchant",
     "pre-commit",
 ]
+
 test = [
     "pytest >= 7.0.0",
     "pytest-cov >= 3.0.0",
     "pytest-xdist >= 2.5.0",
 ]
+
 docs = [
     "sphinx >= 5.0.0",
     "sphinx-autoapi",
@@ -240,16 +251,24 @@ docs = [
     "myst-parser",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["vla_arena*"]
-exclude = []
+[project.urls]
+Homepage = "https://vla-arena.github.io"
+Repository = "https://github.com/PKU-Alignment/VLA-Arena"
+Documentation = "https://github.com/PKU-Alignment/VLA-Arena/docs"
+"Bug Report" = "https://github.com/PKU-Alignment/VLA-Arena/issues"
 
 [tool.setuptools]
 include-package-data = true
 eager-resources = ["*"]
 
-# --- Tool Configurations (Integrated from File B) ---
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vla_arena", "vla_arena.*", "scripts"]
+
+[tool.setuptools.dynamic]
+version = {attr = "vla_arena.__version__"}
+
+# Linter tools #################################################################
 
 [tool.black]
 line-length = 79

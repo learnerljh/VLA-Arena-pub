@@ -40,7 +40,7 @@ def get_vla_arena_path(query_key):
 
     if query_key not in paths:
         raise KeyError(
-            f"Key '{query_key}' not found. Available keys: {list(paths.keys())}"
+            f"Key '{query_key}' not found. Available keys: {list(paths.keys())}",
         )
 
     return os.path.abspath(paths[query_key])
