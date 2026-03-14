@@ -1208,7 +1208,10 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         # If the special empty token ('') does not already appear after the colon (':') token in the prompt
         # (after "OUT:" or "ASSISTANT:"), insert it to match the inputs seen at training time
         if not torch.all(input_ids[:, -1] == 29871):
-            input_ids[:, -1] = 29871
+            input_ids = torch.cat(
+                [input_ids, input_ids.new_full((input_ids.shape[0], 1), 29871)],
+                dim=-1,
+            )
 
         pixel_values = kwargs['pixel_values']
         attention_mask = kwargs['attention_mask']
