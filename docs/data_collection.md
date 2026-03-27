@@ -161,6 +161,8 @@ The dataset builder is already configured with the following features:
   - `wrist_image`: Wrist camera RGB image (256×256×3)
   - `state`: Robot end-effector state (8D: 6D pose + 2D gripper state)
   - `joint_state`: Robot joint angles (7D)
+  - `ee_force`: Robot end-effector force (3D, optional on old HDF5 files)
+  - `ee_torque`: Robot end-effector torque (3D, optional on old HDF5 files)
 
 - **Action Data**:
   - `action`: Robot end-effector action (7D)

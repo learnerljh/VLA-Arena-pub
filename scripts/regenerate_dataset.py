@@ -67,6 +67,180 @@ from vla_arena.vla_arena.envs import OffScreenRenderEnv
 
 IMAGE_RESOLUTION = 256
 MIN_DEMOS_WARNING_THRESHOLD = 20
+EE_FORCE_OBS_KEYS = (
+    'robot0_eef_force',
+    'robot0_force',
+    'eef_force',
+    'force',
+)
+EE_TORQUE_OBS_KEYS = (
+    'robot0_eef_torque',
+    'robot0_torque',
+    'eef_torque',
+    'torque',
+)
+
+
+def _as_vector(data, size):
+    """Returns the first ``size`` entries of ``data`` as a float32 vector."""
+    if data is None:
+        return None
+
+    arr = np.asarray(data, dtype=np.float32).reshape(-1)
+    if arr.size < size:
+        return None
+    return arr[:size]
+
+
+def _iter_sensor_names(model):
+    """Returns MuJoCo sensor names when available."""
+    nsensor = int(getattr(model, 'nsensor', 0))
+    if nsensor <= 0:
+        return []
+
+    sensor_id2name = getattr(model, 'sensor_id2name', None)
+    if callable(sensor_id2name):
+        names = []
+        for sensor_id in range(nsensor):
+            name = sensor_id2name(sensor_id)
+            if name is None:
+                names.append('')
+                continue
+            if isinstance(name, bytes):
+                name = name.decode('utf8')
+            names.append(name)
+        return names
+
+    sensor_names = getattr(model, 'sensor_names', None)
+    if sensor_names is None:
+        return []
+
+    names = []
+    for name in sensor_names[:nsensor]:
+        if name is None:
+            names.append('')
+            continue
+        if isinstance(name, bytes):
+            name = name.decode('utf8')
+        names.append(name)
+    return names
+
+
+def _score_sensor_name(name, kind):
+    """Scores how likely a MuJoCo sensor name matches the EEF wrench signal."""
+    lname = name.lower()
+    if kind not in lname:
+        return None
+
+    score = 1
+    if 'robot0' in lname:
+        score += 4
+    if any(
+        token in lname
+        for token in ('eef', 'ee', 'wrist', 'hand', 'grip', 'gripper', 'ft')
+    ):
+        score += 3
+    if 'joint' in lname:
+        score -= 2
+    return score
+
+
+def _resolve_wrench_sensor_slices(env):
+    """
+    Resolves MuJoCo sensor slices for end-effector force / torque.
+
+    The exact sensor names depend on the robot XML, so we use a small scoring
+    heuristic and cache the winning slices for the rest of the episode.
+    """
+    model = env.sim.model
+    sensor_adr = getattr(model, 'sensor_adr', None)
+    sensor_dim = getattr(model, 'sensor_dim', None)
+    if sensor_adr is None or sensor_dim is None:
+        return {
+            'force_slice': None,
+            'torque_slice': None,
+            'force_name': None,
+            'torque_name': None,
+        }
+
+    names = _iter_sensor_names(model)
+    best = {
+        'force': (-1, None, None),
+        'torque': (-1, None, None),
+    }
+
+    for sensor_id, name in enumerate(names):
+        for kind in ('force', 'torque'):
+            score = _score_sensor_name(name, kind)
+            if score is None:
+                continue
+
+            dim = int(sensor_dim[sensor_id])
+            if dim < 3:
+                continue
+
+            start = int(sensor_adr[sensor_id])
+            sensor_slice = slice(start, start + dim)
+            if score > best[kind][0]:
+                best[kind] = (score, sensor_slice, name)
+
+    return {
+        'force_slice': best['force'][1],
+        'torque_slice': best['torque'][1],
+        'force_name': best['force'][2],
+        'torque_name': best['torque'][2],
+    }
+
+
+def extract_ee_wrench(env, obs, sensor_cache=None):
+    """
+    Extracts end-effector force / torque from observations or MuJoCo sensors.
+
+    Returns:
+        force (np.ndarray | None): Shape ``(3,)`` if available.
+        torque (np.ndarray | None): Shape ``(3,)`` if available.
+        source (str | None): Human-readable provenance for debugging.
+        sensor_cache (dict): Cached sensor slices for subsequent calls.
+    """
+    force = None
+    torque = None
+    force_source = None
+    torque_source = None
+
+    for key in EE_FORCE_OBS_KEYS:
+        if key in obs:
+            force = _as_vector(obs[key], 3)
+            if force is not None:
+                force_source = f'obs:{key}'
+                break
+
+    for key in EE_TORQUE_OBS_KEYS:
+        if key in obs:
+            torque = _as_vector(obs[key], 3)
+            if torque is not None:
+                torque_source = f'obs:{key}'
+                break
+
+    if sensor_cache is None:
+        sensor_cache = _resolve_wrench_sensor_slices(env)
+
+    sensor_data = getattr(env.sim.data, 'sensordata', None)
+    if sensor_data is not None:
+        if force is None and sensor_cache['force_slice'] is not None:
+            force = _as_vector(sensor_data[sensor_cache['force_slice']], 3)
+            if force is not None:
+                force_source = f"sensor:{sensor_cache['force_name']}"
+        if torque is None and sensor_cache['torque_slice'] is not None:
+            torque = _as_vector(sensor_data[sensor_cache['torque_slice']], 3)
+            if torque is not None:
+                torque_source = f"sensor:{sensor_cache['torque_name']}"
+
+    if force_source is None and torque_source is None:
+        source = None
+    else:
+        source = f'force={force_source};torque={torque_source}'
+
+    return force, torque, source, sensor_cache
 
 
 def resolve_bddl_path(default_path: str, override: str | None) -> str:
@@ -287,9 +461,31 @@ def replay_actions(env, actions, initial_state):
     gripper_states = []
     joint_states = []
     robot_states = []
+    ee_forces = []
+    ee_torques = []
     camera_images = {}
     for camera in camera_names:
         camera_images[camera] = []
+
+    sensor_cache = None
+    force_probe, torque_probe, wrench_source, sensor_cache = extract_ee_wrench(
+        env,
+        obs,
+        sensor_cache,
+    )
+    has_force = force_probe is not None
+    has_torque = torque_probe is not None
+    if not has_force or not has_torque:
+        missing = []
+        if not has_force:
+            missing.append('force')
+        if not has_torque:
+            missing.append('torque')
+        print(
+            '  Warning: missing end-effector '
+            + ' / '.join(missing)
+            + ' signals; regenerated dataset will omit them for this replay.',
+        )
 
     # Replay actions
     for action_idx, action in enumerate(actions):
@@ -317,6 +513,19 @@ def replay_actions(env, actions, initial_state):
                 ),
             ),
         )
+        force, torque, _, sensor_cache = extract_ee_wrench(
+            env,
+            obs,
+            sensor_cache,
+        )
+        if has_force:
+            ee_forces.append(
+                force if force is not None else np.zeros(3, dtype=np.float32)
+            )
+        if has_torque:
+            ee_torques.append(
+                torque if torque is not None else np.zeros(3, dtype=np.float32)
+            )
 
         for camera in camera_names:
             camera_images[camera].append(obs[camera + '_image'])
@@ -336,6 +545,9 @@ def replay_actions(env, actions, initial_state):
         'gripper_states': gripper_states,
         'joint_states': joint_states,
         'robot_states': robot_states,
+        'ee_forces': ee_forces if has_force else None,
+        'ee_torques': ee_torques if has_torque else None,
+        'ee_wrench_source': wrench_source,
         'actions': actions,
         'success': success,
     }
@@ -691,6 +903,30 @@ def process_level(task_suite, task_level, args, metainfo_json_dict):
                     'ee_ori',
                     data=np.stack(replay_data['ee_states'], axis=0)[:, 3:],
                 )
+                if replay_data['ee_forces'] is not None:
+                    obs_grp.create_dataset(
+                        'ee_force',
+                        data=np.stack(replay_data['ee_forces'], axis=0),
+                    )
+                if replay_data['ee_torques'] is not None:
+                    obs_grp.create_dataset(
+                        'ee_torque',
+                        data=np.stack(replay_data['ee_torques'], axis=0),
+                    )
+                if (
+                    replay_data['ee_forces'] is not None
+                    and replay_data['ee_torques'] is not None
+                ):
+                    obs_grp.create_dataset(
+                        'ee_wrench',
+                        data=np.concatenate(
+                            [
+                                np.stack(replay_data['ee_forces'], axis=0),
+                                np.stack(replay_data['ee_torques'], axis=0),
+                            ],
+                            axis=-1,
+                        ),
+                    )
                 for camera in camera_names:
                     obs_grp.create_dataset(
                         camera + '_rgb',
@@ -711,6 +947,10 @@ def process_level(task_suite, task_level, args, metainfo_json_dict):
                 ep_data_grp.create_dataset(
                     'language_instruction', data=language_instruction
                 )
+                if replay_data['ee_wrench_source'] is not None:
+                    ep_data_grp.attrs['ee_wrench_source'] = replay_data[
+                        'ee_wrench_source'
+                    ]
 
                 # Update metainfo
                 task_key = (
@@ -1058,6 +1298,40 @@ def main(args):
                                     replay_data['ee_states'], axis=0
                                 )[:, 3:],
                             )
+                            if replay_data['ee_forces'] is not None:
+                                obs_grp.create_dataset(
+                                    'ee_force',
+                                    data=np.stack(
+                                        replay_data['ee_forces'], axis=0
+                                    ),
+                                )
+                            if replay_data['ee_torques'] is not None:
+                                obs_grp.create_dataset(
+                                    'ee_torque',
+                                    data=np.stack(
+                                        replay_data['ee_torques'], axis=0
+                                    ),
+                                )
+                            if (
+                                replay_data['ee_forces'] is not None
+                                and replay_data['ee_torques'] is not None
+                            ):
+                                obs_grp.create_dataset(
+                                    'ee_wrench',
+                                    data=np.concatenate(
+                                        [
+                                            np.stack(
+                                                replay_data['ee_forces'],
+                                                axis=0,
+                                            ),
+                                            np.stack(
+                                                replay_data['ee_torques'],
+                                                axis=0,
+                                            ),
+                                        ],
+                                        axis=-1,
+                                    ),
+                                )
                             for camera in camera_names:
                                 obs_grp.create_dataset(
                                     camera + '_rgb',
@@ -1084,6 +1358,10 @@ def main(args):
                                 'language_instruction',
                                 data=language_instruction,
                             )
+                            if replay_data['ee_wrench_source'] is not None:
+                                ep_data_grp.attrs['ee_wrench_source'] = (
+                                    replay_data['ee_wrench_source']
+                                )
 
                             # Update metainfo
                             task_key = f"{task.replace(' ', '_')}"

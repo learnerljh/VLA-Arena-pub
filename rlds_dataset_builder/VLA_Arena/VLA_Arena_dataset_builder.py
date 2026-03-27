@@ -31,6 +31,25 @@ os.environ['NO_GCE_CHECK'] = (
 )
 
 
+def _load_ee_force_and_torque(obs_group, num_steps):
+    """Loads optional EEF force / torque arrays, defaulting to zeros."""
+    if 'ee_force' in obs_group:
+        ee_force = np.asarray(obs_group['ee_force'][()], dtype=np.float32)
+    elif 'ee_wrench' in obs_group:
+        ee_force = np.asarray(obs_group['ee_wrench'][()][:, :3], np.float32)
+    else:
+        ee_force = np.zeros((num_steps, 3), dtype=np.float32)
+
+    if 'ee_torque' in obs_group:
+        ee_torque = np.asarray(obs_group['ee_torque'][()], dtype=np.float32)
+    elif 'ee_wrench' in obs_group:
+        ee_torque = np.asarray(obs_group['ee_wrench'][()][:, 3:], np.float32)
+    else:
+        ee_torque = np.zeros((num_steps, 3), dtype=np.float32)
+
+    return ee_force, ee_torque
+
+
 def _generate_examples(paths) -> Iterator[tuple[str, Any]]:
     """Yields episodes for list of data paths."""
     # the line below needs to be *inside* generate_examples so that each worker creates it's own model
@@ -45,28 +64,20 @@ def _generate_examples(paths) -> Iterator[tuple[str, Any]]:
                 camera_name = F['data'].attrs['camera_names'][0]
             if f'demo_{demo_id}' not in F['data'].keys():
                 return None  # skip episode if the demo doesn't exist (e.g. due to failed demo)
+            obs_group = F['data'][f'demo_{demo_id}']['obs']
             actions = F['data'][f'demo_{demo_id}']['actions'][()]
-            states = F['data'][f'demo_{demo_id}']['obs']['ee_states'][()]
-            gripper_states = F['data'][f'demo_{demo_id}']['obs'][
-                'gripper_states'
-            ][()]
-            joint_states = F['data'][f'demo_{demo_id}']['obs']['joint_states'][
-                ()
-            ]
-            images = F['data'][f'demo_{demo_id}']['obs'][camera_name + '_rgb'][
-                ()
-            ]
-            if (
-                'robot0_eye_in_hand_rgb'
-                in F['data'][f'demo_{demo_id}']['obs'].keys()
-            ):
-                wrist_images = F['data'][f'demo_{demo_id}']['obs'][
-                    'robot0_eye_in_hand_rgb'
-                ][()]
+            states = obs_group['ee_states'][()]
+            gripper_states = obs_group['gripper_states'][()]
+            joint_states = obs_group['joint_states'][()]
+            ee_force, ee_torque = _load_ee_force_and_torque(
+                obs_group,
+                actions.shape[0],
+            )
+            images = obs_group[camera_name + '_rgb'][()]
+            if 'robot0_eye_in_hand_rgb' in obs_group.keys():
+                wrist_images = obs_group['robot0_eye_in_hand_rgb'][()]
             else:
-                wrist_images = F['data'][f'demo_{demo_id}']['obs'][
-                    'eye_in_hand_rgb'
-                ][()]
+                wrist_images = obs_group['eye_in_hand_rgb'][()]
 
         # compute language instruction
         raw_file_string = os.path.basename(episode_path).split('/')[-1]
@@ -95,6 +106,10 @@ def _generate_examples(paths) -> Iterator[tuple[str, Any]]:
                         ),
                         'joint_state': np.asarray(
                             joint_states[i], dtype=np.float32
+                        ),
+                        'ee_force': np.asarray(ee_force[i], dtype=np.float32),
+                        'ee_torque': np.asarray(
+                            ee_torque[i], dtype=np.float32
                         ),
                     },
                     'action': np.asarray(actions[i], dtype=np.float32),
@@ -173,6 +188,16 @@ class VLAArena(MultiThreadedDatasetBuilder):
                                         shape=(7,),
                                         dtype=np.float32,
                                         doc='Robot joint angles.',
+                                    ),
+                                    'ee_force': tfds.features.Tensor(
+                                        shape=(3,),
+                                        dtype=np.float32,
+                                        doc='Robot end-effector force.',
+                                    ),
+                                    'ee_torque': tfds.features.Tensor(
+                                        shape=(3,),
+                                        dtype=np.float32,
+                                        doc='Robot end-effector torque.',
                                     ),
                                 },
                             ),
